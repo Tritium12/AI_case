@@ -53,39 +53,44 @@ def load_json_file(file_path):
 
 async def crawl_urls_with_depth(urls, max_depth=1):
     """
-    Зачем нужна: Это наш "паук". Она скачивает сайты, вытаскивает чистый текст и убирает меню/рекламу.
-    Логика: Использует BFSDeepCrawlStrategy для перехода по ссылкам (глубина 1 = главная + 1 уровень ссылок).
+    Зачем нужна: Скачивает сайты, вытаскивает чистый текст и убирает меню/рекламу.
+    Логика: Запускает BFS-обход для КАЖДОГО URL отдельно, чтобы избежать багов
+    с несколькими стартовыми точками в crawl4ai.
     """
     all_docs = []
     
-    # Настройки браузера (headless = без открытия окна)
     browser_config = BrowserConfig(headless=True, verbose=False)
     
-    # Очистка текста от мусора (меню, футеры, скрипты)
     content_filter = PruningContentFilter(threshold=0.48, threshold_type="fixed")
     md_generator = DefaultMarkdownGenerator(content_filter=content_filter)
     
-    # Конфигурация обхода: глубина, таймауты, стратегия
+    # Конфигурация запуска (без deep_crawl_strategy внутри!)
     run_config = CrawlerRunConfig(
         markdown_generator=md_generator,
-        deep_crawl_strategy=BFSDeepCrawlStrategy(
-            max_depth=max_depth,
-            include_external=False  # Не уходить на чужие сайты
-        ),
-        page_timeout=15000  # 15 секунд на загрузку одной страницы
+        page_timeout=15000
     )
 
     async with AsyncWebCrawler(config=browser_config) as crawler:
         for url in urls:
             print(f"  -> 🕸️ Сканируем сайт: {url} (глубина {max_depth})...")
             try:
-                # Оборачиваем в wait_for: если за 120 секунд не уложился — убиваем процесс
+                # Создаём стратегию для КАЖДОГО url отдельно
+                strategy = BFSDeepCrawlStrategy(
+                    max_depth=max_depth,
+                    include_external=False
+                )
+                
+                # Передаём стратегию напрямую в arun, а не через конфиг
                 result = await asyncio.wait_for(
-                    crawler.arun(url=url, config=run_config),
+                    crawler.arun(
+                        url=url, 
+                        config=run_config, 
+                        deep_crawl_strategy=strategy  # <--- Ключевое исправление
+                    ),
                     timeout=120.0 
                 )
                 
-                # Обработка результатов: crawl4ai может вернуть список страниц (при глубоком обходе)
+                # Обработка результатов
                 if isinstance(result, list):
                     for page in result:
                         if page.success and page.markdown.fit_markdown:
